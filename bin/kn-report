@@ -1,0 +1,278 @@
+#!/usr/bin/env ruby
+require 'pry'
+require 'resolv'
+require 'resolv-replace'
+require 'awesome_print'
+require 'excon'
+require 'faraday'
+require 'faraday_middleware'
+require 'faraday_sdp_auth'
+require 'ascii_charts'
+
+$host, $api_key, $private_key, $kn = ARGV
+
+Faraday.default_adapter = :excon
+Excon.defaults[:ssl_verify_peer] = false
+Excon.defaults[:read_timeout]    = 360
+
+def sdp_request(api_path)
+  sdp_connection = Faraday.new "https://#$host" do |conn|
+    conn.request :sdp_auth,
+      :api_key     => $api_key,
+      :private_key => $private_key
+
+    conn.response :logger
+    conn.response :json
+
+    conn.use      :gzip
+    conn.adapter Faraday.default_adapter
+  end
+
+  sdp_connection.get api_path
+end
+
+def target_distribution(footprints)
+  footprints.reduce({}) do |hash, footprint|
+    mech_id, mech_label = footprint.values_at('id', 'label')
+    num_downstreams     = footprint['nodes'].length - 1
+    hash[num_downstreams] ||= 0
+    hash[num_downstreams] +=  1
+    hash
+  end
+end
+
+def mech_target_map(footprints)
+  footprints.reduce({}) do |hash, footprint|
+    mech_label          = footprint['focal_node']['label']
+    num_downstreams     = footprint['nodes'].length - 1
+    hash[mech_label]    = num_downstreams
+    hash
+  end
+end
+
+def mech_function_map(footprints)
+  footprints.reduce({}) do |hash, footprint|
+    mech_fx         = footprint['focal_node']['function']
+    hash[mech_fx] ||= 0
+    hash[mech_fx]  += 1
+    hash
+  end
+end
+
+def bucket_target_distribution(distribution)
+  ranges = [
+      4..4,
+      5..5,
+      6..6,
+      7..7,
+      8..8,
+      9..9,
+     10..20,
+     21..50,
+     50..100,
+    101..200,
+    201..300,
+    301..400,
+    401..500,
+    501..600,
+    601..700,
+    701..800,
+    801..900,
+    901..1000,
+   1001..1100,
+   1101..1200,
+   1201..1300,
+   1301..1400,
+   1401..1500,
+   1501..1600,
+   1601..1700,
+   1701..1800,
+   1801..1900,
+   1901..2000,
+   2001..2100,
+   2101..2200,
+   2201..2300,
+   2301..2400,
+   2401..2500,
+   2501..2600,
+   2601..2700,
+   2701..2800,
+   2801..2900,
+   2901..3000
+  ]
+  distribution.reduce({}) { |hash, (k, v)|
+    num_downstream_range = ranges.find { |r| r.include?(k) }
+    if num_downstream_range
+      range_name = num_downstream_range.max
+      hash[range_name] ||= 0
+      hash[range_name] += v
+    end
+    hash
+  }.sort
+end
+
+def bucket_range_target_distribution(distribution)
+  ranges = [
+      4..4,
+      5..5,
+      6..6,
+      7..7,
+      8..8,
+      9..9,
+     10..20,
+     21..50,
+     50..100,
+    101..200,
+    201..300,
+    301..400,
+    401..500,
+    501..600,
+    601..700,
+    701..800,
+    801..900,
+    901..1000,
+   1001..1100,
+   1101..1200,
+   1201..1300,
+   1301..1400,
+   1401..1500,
+   1501..1600,
+   1601..1700,
+   1701..1800,
+   1801..1900,
+   1901..2000,
+   2001..2100,
+   2101..2200,
+   2201..2300,
+   2301..2400,
+   2401..2500,
+   2501..2600,
+   2601..2700,
+   2701..2800,
+   2801..2900,
+   2901..3000,
+   3001..3100,
+   3101..3200,
+   3201..3300,
+   3301..3400,
+   3401..3500,
+   3501..3600,
+   3601..3700,
+   3701..3800,
+   3801..3900,
+   3901..4000,
+  ]
+  distribution.reduce({}) { |hash, (k, v)|
+    num_downstream_range = ranges.find { |r| r.include?(k) }
+    if num_downstream_range
+      if num_downstream_range.min == num_downstream_range.max
+        range_name = "#{num_downstream_range.min} targets"
+      else
+        range_name = "#{num_downstream_range.min} - #{num_downstream_range.max} targets"
+      end
+      hash[range_name] ||= 0
+      hash[range_name] += v
+    end
+    hash
+  }.sort_by { |x| x[0].to_i }
+end
+
+# Fetch details.
+response = sdp_request("/api/knowledge-networks/#$kn")
+if response.status == 200
+  kn = response.body
+  puts(<<-KN.gsub(/^\s+/, ''))
+    Knowledge Network
+    -----------------
+    Name:        #{kn['name']}
+    Description: #{kn['description']}
+  KN
+else
+  raise %Q{Failed to retrieve knowledge network for "#$kn"}
+end
+
+edges = false
+if edges
+  # Fetch evidence distribution.
+  start    = 0
+  max      = 100_000
+  edge_url = "/api/knowledge-networks/#$kn/edges?start=#{start}&max=#{max}"
+  response = sdp_request(edge_url)
+  rel_hist = {}
+  num_edge = 0
+  while response && response.status == 200 do
+    response.body.each do |edge|
+      rel = edge["relationship"]
+      rel_hist[rel] ||= 0
+      rel_hist[rel] +=  1
+      num_edge      +=  1
+    end
+
+    start += max
+    edge_url = "/api/knowledge-networks/#$kn/edges?start=#{start}&max=#{max}"
+    response = sdp_request(edge_url) rescue nil
+  end
+  puts(<<-ER.gsub(/^\s+/, ''))
+    Edge Relationships
+    ------------------
+  ER
+  ap(rel_hist, :index => false)
+
+  puts(<<-IVD.gsub(/^\s+/, ''))
+    Increase vs. Decrease
+    ---------------------
+    Number of Edges: #{num_edge}
+    Increase Edge:   #{rel_hist['increases'] + rel_hist['directlyIncreases']}
+    Increase %:      #{(rel_hist['increases'] + rel_hist['directlyIncreases']).to_f / num_edge.to_f}
+    Decrease Edge:   #{rel_hist['decreases'] + rel_hist['directlyDecreases']}
+    Decrease %:      #{(rel_hist['decreases'] + rel_hist['directlyDecreases']).to_f / num_edge.to_f}
+  IVD
+end
+
+# Fetch footprints.
+start      = 0
+max        = 1000
+fp_url     = "/api/knowledge-networks/#$kn/footprints?min_targets=4&start=#{start}&max=#{max}"
+response   = sdp_request(fp_url)
+footprints = []
+while response && response.status == 200 do
+  footprints.concat(response.body)
+
+  start    += max
+  fp_url   = "/api/knowledge-networks/#$kn/footprints?min_targets=4&start=#{start}&max=#{max}"
+  response = sdp_request(fp_url) rescue nil
+end
+
+puts(<<-FC.gsub(/^\s+/, ''))
+  Footprint Count
+  ---------------
+  #{footprints.size}
+FC
+ap(footprints[0], :index => false)
+
+distribution                = target_distribution(footprints)
+bucketed_distribution       = bucket_target_distribution(distribution)
+bucketed_range_distribution = bucket_range_target_distribution(distribution)
+
+puts(<<-MTT.gsub(/^\s+/, ''))
+  Mechanism Target Count Histogram
+  --------------------------------
+MTT
+ap(bucketed_range_distribution, :index => false)
+
+puts(<<-MTT.gsub(/^\s+/, ''))
+  Mechanism Function Histogram
+  ----------------------------
+MTT
+ap(mech_function_map(footprints).to_a, :index => false)
+
+ascii_bar = AsciiCharts::Cartesian.new(bucketed_distribution, :bar => true, :hide_zero => false, :y_step_size => 10).draw
+puts(<<-KN.gsub(/^\s+/, ''))
+  Mechanism Target Distribution
+  -----------------------------
+
+  X-axis: Number of Downstreams (bucketed)
+  Y-axis: Number of Mechanisms  (bucketed)
+
+  #{ascii_bar}
+KN

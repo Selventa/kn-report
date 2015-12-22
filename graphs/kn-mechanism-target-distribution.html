@@ -1,0 +1,37 @@
+<html>
+  <head>
+    <script type="text/javascript" src="https://www.google.com/jsapi"></script>
+    <script type="text/javascript">
+      google.load("visualization", "1", {packages:["corechart"]});
+      google.setOnLoadCallback(drawChart);
+      function drawChart() {
+        var data = google.visualization.arrayToDataTable([
+          ['Mechanisms', 'Number of mechanisms controlling this range of downstream targets'],
+        ]);
+
+        var options = {
+          title: 'Distribution of number of mechanism downstream targets',
+          fontSize: 12,
+          histogram: {
+            bucketSize: 10
+          },
+          legend: {
+            position: 'none',
+          },
+          hAxis: {
+            title: 'Number of mechanisms'
+          },
+          vAxis: {
+            title: 'Number of downstream targets'
+          }
+        };
+
+        var chart = new google.visualization.BarChart(document.getElementById('chart_div'));
+        chart.draw(data, options);
+      }
+    </script>
+  </head>
+  <body>
+    <div id="chart_div" style="width: 1600; height: 1200;"></div>
+  </body>
+</html>
